@@ -307,13 +307,13 @@ def display_dijkstra(t):
         print(stop_name(i.stop)+" à "+i.stop.arrival_time+", statut : "+i.status)
 
 def better_dijkstra(l):
-    print("départ de "+stop_name(l[0].stop)+" à "+clean_hour(l[0].stop.departure_time))
+    print("departure from "+stop_name(l[0].stop)+" at "+clean_hour(l[0].stop.departure_time))
     for i in range(1,len(l)):
         if l[i].status == "onboard":
-            print("correspondance de "+clean_time(time_diff(l[i].stop.departure_time,l[i-1].stop.arrival_time))+" à "+stop_name(l[i].stop))
+            print(clean_time(time_diff(l[i].stop.departure_time,l[i-1].stop.arrival_time))+" connection in "+stop_name(l[i].stop))
         elif l[i].status == "station":
-            print(stop_name(l[i-1].stop)+" à "+clean_hour(l[i-1].stop.departure_time)+" -> "+stop_name(l[i].stop)+" à "+clean_hour(l[i].stop.arrival_time))
-    print("arrivée à "+stop_name(l[-1].stop)+" à "+clean_hour(l[-1].stop.arrival_time))
+            print(stop_name(l[i-1].stop)+" at "+clean_hour(l[i-1].stop.departure_time)+" -> "+stop_name(l[i].stop)+" at "+clean_hour(l[i].stop.arrival_time))
+    print("arrival in "+stop_name(l[-1].stop)+" at "+clean_hour(l[-1].stop.arrival_time))
 
 start = time.time()
 get_latest()
