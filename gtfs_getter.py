@@ -6,6 +6,9 @@ _FOLDER = "gtfs/"
 _URL = 'https://eu.ftp.opendatasoft.com/sncf/gtfs/export-ter-gtfs-last.zip'
 
 def get_latest():
+    """
+    Downloads the file at the given url, unzips it and stores its content in the specified folder, erasing the eventual previous data
+    """
     for file in listdir(_FOLDER):
         remove(_FOLDER+file)
     
