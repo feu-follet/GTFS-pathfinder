@@ -1,23 +1,14 @@
 import heapq
 import functools
 import time
+from recherche import k_best_match
 from gtfs_getter import get_latest
 
-_FOLDER = "corrected_gtfs/"
+_FOLDER = "gtfs/"
 
 _CALENDAR_DATES_ONLY = True
 
-_STOP_PENALTY = 2000
-_MAX_COUNT = 20
-
-
-if _CALENDAR_DATES_ONLY:
-    calendar = {}
-    with open(_FOLDER+"calendar_dates.txt",encoding="utf-8") as f:
-        l = f.readlines()
-        for i in range(1,len(l)):
-            line = l[i].split(",")
-            calendar[line[0]] = (line[1],int(line[2]))
+_STOP_PENALTY = 3
 
 
 def extract_file(filename,obj_type):
@@ -199,18 +190,24 @@ def time_diff(t1,t2):
     t2 = [int(i) for i in t2.split(":")]
     return 3600*(t1[0]-t2[0])+60*(t1[1]-t2[1])+t1[2]-t2[2]
 
-def dijkstra_trip(departure_id,arrival_id,dates,talkative=False):
+def dijkstra_trip(departure_id,arrival_id,dates, start_hour, talkative=False):
     stops = get_stops_on_dates(dates)
     dist_heap = []
     current_dist = {}
     seen = set()
     
     for stop in stops:
-        if stop.stop_id==departure_id:
-            heapq.heappush(dist_heap,(0,DijkstraElement(stop, 0, "onboard", None)))
+        diff = time_diff(stop.departure_time, start_hour)
+        if stop.stop_id==departure_id and diff>=0:
+            heapq.heappush(dist_heap,(0,DijkstraElement(stop, 60*int(stop.departure_time.split(":")[0]), "onboard", None)))
             current_dist[stop]=0
     
-    current = heapq.heappop(dist_heap)
+    try:
+        current = heapq.heappop(dist_heap)
+    except IndexError:
+        print("aucune station de départ - vérifiez l'orthographe des noms de stations, la date et assurez vous que votre version du gtfs est récente")
+        return []
+    
     while len(dist_heap) != 0 and current[1].stop.stop_id != arrival_id:
         if talkative:
             print(len(dist_heap))
@@ -221,7 +218,7 @@ def dijkstra_trip(departure_id,arrival_id,dates,talkative=False):
             if current_stop.status == "onboard":
                 next_possible = get_all_stations_from_stop(current_stop.stop)
                 for i in next_possible:
-                    new_time = current[0]+time_diff(i.arrival_time,current_stop.stop.departure_time)
+                    new_time = current[0]+time_diff(i.arrival_time,current_stop.stop.departure_time)+_STOP_PENALTY
                     if i in current_dist:
                         if current_dist[i]>new_time:
                             current_dist[i] = new_time
@@ -256,29 +253,114 @@ def dijkstra_trip(departure_id,arrival_id,dates,talkative=False):
             path.append(path[-1].previous)
         return path
     else:
-        print("unable to find path on given dates")
+        return []
+
+def dijkstra_trip_earliest_arrival(departure_id,arrival_id,dates, start_hour,talkative=False):
+    #start_hour doit être au format hh:mm:ss
+    stops = get_stops_on_dates(dates)
+    dist_heap = []
+    current_dist = {}
+    seen = set()
+    
+    for stop in stops:
+        diff = time_diff(stop.departure_time, start_hour)
+        if stop.stop_id==departure_id and diff>=0:
+            heapq.heappush(dist_heap,(diff,DijkstraElement(stop, 60*int(stop.departure_time.split(":")[0]), "onboard", None)))
+            current_dist[stop]=diff
+    
+    try:
+        current = heapq.heappop(dist_heap)
+    except IndexError:
+        print("aucune station de départ - vérifiez l'orthographe des noms de stations, la date et assurez vous que votre version du gtfs est récente")
+        return []
+    
+    while len(dist_heap) != 0 and current[1].stop.stop_id != arrival_id:
+        if talkative:
+            print(len(dist_heap))
+            print("time : "+str(current[0])+", station : "+stop_name(current[1].stop)+", status : "+current[1].status)
+        
+        if current[0]==current_dist[current[1].stop] and current[1].stop not in seen:
+            current_stop = current[1]
+            if current_stop.status == "onboard":
+                next_possible = get_all_stations_from_stop(current_stop.stop)
+                for i in next_possible:
+                    new_time = current[0]+time_diff(i.arrival_time,current_stop.stop.departure_time)+_STOP_PENALTY
+                    if i in current_dist:
+                        if current_dist[i]>new_time:
+                            current_dist[i] = new_time
+                            to_add = DijkstraElement(i, new_time, "station", current_stop)
+                            heapq.heappush(dist_heap,(new_time,to_add))
+                    else:
+                        current_dist[i] = new_time
+                        to_add = DijkstraElement(i, new_time, "station", current_stop)
+                        heapq.heappush(dist_heap,(new_time,to_add))
+                        
+            elif current_stop.status == "station":
+                next_possible = get_all_trips_after_stop(current_stop.stop,stops,current_stop.stop.trip_id)
+                for i in next_possible:
+                    new_time = current[0]+time_diff(i.departure_time,current_stop.stop.arrival_time)
+                    if i in current_dist:
+                        if current_dist[i]>new_time:
+                            current_dist[i] = new_time
+                            to_add = DijkstraElement(i, new_time, "onboard", current_stop)
+                            heapq.heappush(dist_heap,(new_time,to_add))
+                    else:
+                        current_dist[i] = new_time
+                        to_add = DijkstraElement(i, new_time, "onboard", current_stop)
+                        heapq.heappush(dist_heap,(new_time,to_add))
+                
+        seen.add(current[1].stop)
+        current = heapq.heappop(dist_heap)
+        
+        
+    if current[1].stop.stop_id == arrival_id:
+        path = [current[1]]
+        while isinstance(path[-1].previous,DijkstraElement):
+            path.append(path[-1].previous)
+        return path
+    else:
         return []
     
 
 def stop_name(stop):
     return _STOPS_DICT[stop.stop_id].stop_name
 
-def dijkstra_clean_prompt(departure,arrival,dates,Talkative=False):
+def dijkstra_clean_prompt(departure,arrival,dates, start_hour = "00:00:00", Talkative=False):
+    #les dates doivent être au format JJ/MM/AAAA
     start = time.time()
     new_dates = []
     for i in dates:
         d = i.split("/")
         new_dates.append("".join(d[::-1]))
     for i in _STOPS_LIST:
-        if departure == i.stop_name and "Train" in i.stop_id:
+        if departure.lower() == i.stop_name.lower() and "Train" in i.stop_id:
             departure_id = i.stop_id
             break
     for i in _STOPS_LIST:
-        if arrival == i.stop_name and "Train" in i.stop_id:
+        if arrival.lower() == i.stop_name.lower() and "Train" in i.stop_id:
             arrival_id = i.stop_id
             break
-    result = dijkstra_trip(departure_id,arrival_id,new_dates,Talkative)
-    print(time.time()-start)
+    result = dijkstra_trip(departure_id,arrival_id,new_dates, start_hour,Talkative)
+    print(round(time.time()-start, 2))
+    return result[::-1]
+
+def dijkstra_clean_prompt_earliest_arrival(departure,arrival, start_hour,dates,Talkative=False):
+    #les dates doivent être au format JJ/MM/AAAA
+    start = time.time()
+    new_dates = []
+    for i in dates:
+        d = i.split("/")
+        new_dates.append("".join(d[::-1]))
+    for i in _STOPS_LIST:
+        if departure.lower() == i.stop_name.lower() and "Train" in i.stop_id:
+            departure_id = i.stop_id
+            break
+    for i in _STOPS_LIST:
+        if arrival.lower() == i.stop_name.lower() and "Train" in i.stop_id:
+            arrival_id = i.stop_id
+            break
+    result = dijkstra_trip_earliest_arrival(departure_id,arrival_id,new_dates, start_hour,Talkative)
+    print("\ntemps de recherche :" + str(round(time.time()-start, 2)) + "s")
     return result[::-1]
 
 def clean_time(seconds):
@@ -307,19 +389,35 @@ def display_dijkstra(t):
         print(stop_name(i.stop)+" à "+i.stop.arrival_time+", statut : "+i.status)
 
 def better_dijkstra(l):
-    print("departure from "+stop_name(l[0].stop)+" at "+clean_hour(l[0].stop.departure_time))
+    if l==[]:
+        print("pas de trajet trouvé :/")
+        return
+    print("")
+    print("départ de "+stop_name(l[0].stop)+" à "+clean_hour(l[0].stop.departure_time))
     for i in range(1,len(l)):
         if l[i].status == "onboard":
-            print(clean_time(time_diff(l[i].stop.departure_time,l[i-1].stop.arrival_time))+" connection in "+stop_name(l[i].stop))
+            print("correspondance de "+clean_time(time_diff(l[i].stop.departure_time,l[i-1].stop.arrival_time))+" à "+stop_name(l[i].stop))
         elif l[i].status == "station":
-            print(stop_name(l[i-1].stop)+" at "+clean_hour(l[i-1].stop.departure_time)+" -> "+stop_name(l[i].stop)+" at "+clean_hour(l[i].stop.arrival_time))
-    print("arrival in "+stop_name(l[-1].stop)+" at "+clean_hour(l[-1].stop.arrival_time))
+            print(stop_name(l[i-1].stop)+" à "+clean_hour(l[i-1].stop.departure_time)+" -> "+stop_name(l[i].stop)+" à "+clean_hour(l[i].stop.arrival_time))
+    print("arrivée à "+stop_name(l[-1].stop)+" à "+clean_hour(l[-1].stop.arrival_time))
+    print("temps total de trajet : "+clean_time(time_diff(l[-1].stop.arrival_time, l[0].stop.departure_time)))
+
+load_gtfs = input("télécharger le fichier gtfs ? (o/n) ")
+if load_gtfs == "o":
+    start = time.time()
+    get_latest() 
+    print("gtfs requesting time : "+str(round(time.time()-start,2))+" seconds")
 
 start = time.time()
-get_latest()
-print("gtfs requesting time : "+str(round(time.time()-start,2))+" seconds")
 
-start = time.time()
+
+if _CALENDAR_DATES_ONLY:
+    calendar = {}
+    with open(_FOLDER+"calendar_dates.txt",encoding="utf-8") as f:
+        l = f.readlines()
+        for i in range(1,len(l)):
+            line = l[i].split(",")
+            calendar[line[0]] = (line[1],int(line[2]))
 
 _SERVICE_TIMES_LIST = extract_file(_FOLDER+"/calendar_dates.txt", Service_Time)
 _SERVICE_TIMES_DICT = {}
@@ -361,3 +459,46 @@ for i in _STOP_TIMES_LIST:
     
 
 print("total extraction time : "+str(round(time.time()-start,2))+" seconds")
+
+SAINTE = "Saint-Étienne Châteaucreux"
+TOULOUSE = "Toulouse Matabiau"
+HENDAYE = "Les Deux Jumeaux"
+STAGN = "Saint-Agne"
+COL = "Colomiers"
+
+k=7
+
+stop_names_list = list(set([i.stop_name for i in _STOPS_LIST if "Train" in i.stop_id]))
+
+print("\n")
+start_station = input("gare de départ : ")
+print("")
+start_station_matches = k_best_match(start_station, stop_names_list, k)
+for i in range(k):
+    print(i, start_station_matches[i])
+print("")
+start_station = start_station_matches[int(input("entrez le numéro de la station recherchée parmi celles proposées : "))]
+
+print("\n")
+end_station = input("gare d'arrivée : ")
+print("")
+end_station_matches = k_best_match(end_station, stop_names_list, k)
+for i in range(k):
+    print(i, end_station_matches[i])
+print("")
+end_station = end_station_matches[int(input("entrez le numéro de la station recherchée parmi celles proposées : "))]
+
+print("\n")
+start_hour = input("heure du départ (hh:mm) : ")+":00"
+print("\n")
+start_date = input("date du départ (jj/mm/aaaa): ")
+
+mode = int(input("trajet le plus court (0) ou arrivée le plus tôt (1) : "))
+
+#l = dijkstra_clean_prompt(start_station, end_station, [start_date])
+#l = dijkstra_clean_prompt(STAGN, HENDAYE, ["19/10/2024"])
+if mode:
+    l = dijkstra_clean_prompt_earliest_arrival(start_station, end_station, start_hour, [start_date])
+else:
+    l = dijkstra_clean_prompt(start_station, end_station, [start_date], start_hour = start_hour)
+better_dijkstra(l)
